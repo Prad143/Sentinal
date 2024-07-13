@@ -49,3 +49,17 @@ def find_urls(start_url, max_recursion_level):
     
     return sorted(set(urls))
 
+if __name__ == "__main__":
+    # This allows the script to be run standalone for testing
+    import argparse
+    from utils.file_operations import write_urls_to_file
+    
+    parser = argparse.ArgumentParser(description="Find URLs on a website.")
+    parser.add_argument("url", help="The starting URL to crawl")
+    parser.add_argument("--max-level", type=int, default=3, help="Maximum recursion level")
+    parser.add_argument("--output", default="output.txt", help="Output file name")
+    args = parser.parse_args()
+    
+    urls = find_urls(args.url, args.max_level)
+    write_urls_to_file(urls, args.output)
+    print(f"Found {len(urls)} unique URLs. Results written to {args.output}")
