@@ -3,6 +3,7 @@ import pyppeteer
 import re
 from urllib.parse import urljoin
 from utils.file_operations import read_urls_from_file, write_to_file
+import aiohttp
 
 async def extract_js_content(page, url):
     # Extract external JavaScript
@@ -30,14 +31,13 @@ async def extract_js_content(page, url):
 
 async def fetch_js_content(url):
     try:
-        browser = await pyppeteer.launch()
-        page = await browser.newPage()
-        response = await page.goto(url)
-        content = await response.text()
-        await browser.close()
-        return content
-    except Exception:
-        return None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    return await response.text()
+    except Exception as e:
+        print(f"Error fetching JavaScript from {url}: {str(e)}")
+    return None
 
 async def scan_single_url(url, all_js_content, js_url_mapping):
     try:
