@@ -28,17 +28,19 @@ async def analyze_javascript(js_file_path):
     llm = GeminiLLM()
     
     try:
-        with open(js_file_path, 'r') as file:
+        with open(js_file_path, 'r', encoding='utf-8') as file:
             js_content = file.read()
         
         analysis = await llm.analyze_javascript(js_content)
         
         output_file_path = js_file_path.replace('.txt', '_analysis.txt')
-        with open(output_file_path, 'w') as file:
+        with open(output_file_path, 'w', encoding='utf-8') as file:
             file.write(analysis)
         
         print(f"Analysis complete. Results written to {output_file_path}")
         return output_file_path
+    except IOError as e:
+        print(f"Error reading or writing file: {str(e)}")
     except Exception as e:
         print(f"Error during JavaScript analysis: {str(e)}")
-        return None
+    return None
