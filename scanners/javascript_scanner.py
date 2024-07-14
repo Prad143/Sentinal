@@ -1,57 +1,75 @@
+import asyncio
+import pyppeteer
 import re
-import requests
 from urllib.parse import urljoin
 from utils.file_operations import read_urls_from_file, write_to_file
 
-def extract_js_urls(html_content, base_url):
-    js_urls = []
-    script_tags = re.findall(r'<script.*?src=["\'](.+?)["\']', html_content, re.IGNORECASE)
+async def extract_js_content(page, url):
+    # Extract external JavaScript
+    script_tags = await page.evaluate('''() => {
+        return Array.from(document.getElementsByTagName('script'))
+            .filter(script => script.src)
+            .map(script => script.src);
+    }''')
+    
+    external_js = []
     for src in script_tags:
-        full_url = urljoin(base_url, src)
-        js_urls.append(full_url)
-    return js_urls
+        full_url = urljoin(url, src)
+        js_content = await fetch_js_content(full_url)
+        if js_content:
+            external_js.append((full_url, js_content))
+    
+    # Extract inline JavaScript
+    inline_js = await page.evaluate('''() => {
+        return Array.from(document.getElementsByTagName('script'))
+            .filter(script => !script.src)
+            .map(script => script.innerHTML);
+    }''')
+    
+    return external_js, inline_js
 
-def extract_inline_js(html_content):
-    inline_js = re.findall(r'<script>(.*?)</script>', html_content, re.DOTALL)
-    return inline_js
-
-def fetch_js_content(url):
+async def fetch_js_content(url):
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.text
-    except requests.RequestException:
-        pass
-    return None
+        browser = await pyppeteer.launch()
+        page = await browser.newPage()
+        response = await page.goto(url)
+        content = await response.text()
+        await browser.close()
+        return content
+    except Exception:
+        return None
 
-def scan_javascript(input_file, output_file):
+async def scan_single_url(url, all_js_content, js_url_mapping):
+    try:
+        browser = await pyppeteer.launch()
+        page = await browser.newPage()
+        await page.goto(url)
+        
+        external_js, inline_js = await extract_js_content(page, url)
+        
+        for js_url, js_content in external_js:
+            all_js_content.add(js_content)
+            if js_content not in js_url_mapping:
+                js_url_mapping[js_content] = []
+            js_url_mapping[js_content].append(js_url)
+        
+        for js in inline_js:
+            all_js_content.add(js)
+            if js not in js_url_mapping:
+                js_url_mapping[js] = []
+            js_url_mapping[js].append(f"{url} (inline)")
+        
+        await browser.close()
+    except Exception as e:
+        print(f"Error scanning {url}: {str(e)}")
+
+async def scan_javascript(input_file, output_file):
     urls = read_urls_from_file(input_file)
     all_js_content = set()
     js_url_mapping = {}
 
-    for url in urls:
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                # Extract and process external JavaScript
-                js_urls = extract_js_urls(response.text, url)
-                for js_url in js_urls:
-                    js_content = fetch_js_content(js_url)
-                    if js_content:
-                        all_js_content.add(js_content)
-                        if js_content not in js_url_mapping:
-                            js_url_mapping[js_content] = []
-                        js_url_mapping[js_content].append(js_url)
-                
-                # Extract and process inline JavaScript
-                inline_js = extract_inline_js(response.text)
-                for js in inline_js:
-                    all_js_content.add(js)
-                    if js not in js_url_mapping:
-                        js_url_mapping[js] = []
-                    js_url_mapping[js].append(f"{url} (inline)")
-        except requests.RequestException:
-            continue
+    tasks = [scan_single_url(url, all_js_content, js_url_mapping) for url in urls]
+    await asyncio.gather(*tasks)
 
     # Write unique JavaScript content to file
     write_to_file(output_file, "\n".join(all_js_content))
@@ -71,4 +89,4 @@ def scan_javascript(input_file, output_file):
 if __name__ == "__main__":
     # This allows the script to be run standalone for testing
     from config import FILE_NAME, JS_SCANNER_FILE_NAME
-    scan_javascript(FILE_NAME, JS_SCANNER_FILE_NAME)
+    asyncio.get_event_loop().run_until_complete(scan_javascript(FILE_NAME, JS_SCANNER_FILE_NAME))

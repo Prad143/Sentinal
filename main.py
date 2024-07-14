@@ -1,9 +1,10 @@
+import asyncio
 from utils import ui, file_operations
 from scanners import url_finder, javascript_scanner, vulnerability_scanner
 from api import llm
 import config
 
-def main():
+async def main():
     ui.print_banner()
     
     url, max_recursion_level = ui.get_user_input()
@@ -14,12 +15,15 @@ def main():
     ui.print_completion(f"Found {len(urls)} unique URLs. Results written to {config.FILE_NAME}")
     
     ui.print_progress("Scanning JavaScript files...")
-    javascript_scanner.scan_javascript(config.FILE_NAME, config.JS_SCANNER_FILE_NAME)
+    await javascript_scanner.scan_javascript(config.FILE_NAME, config.JS_SCANNER_FILE_NAME)
     ui.print_completion("JavaScript scanning complete.")
     
     ui.print_progress("Analyzing JavaScript with LLM...")
-    llm.analyze_javascript(config.JS_UNIQUE_FILE_NAME)
-    ui.print_completion("LLM analysis complete.")
+    analysis_file = await llm.analyze_javascript(config.JS_UNIQUE_FILE_NAME)
+    if analysis_file:
+        ui.print_completion(f"LLM analysis complete. Results written to {analysis_file}")
+    else:
+        ui.print_completion("LLM analysis failed.")
     
     ui.print_progress("Filtering LLM output...")
     vulnerability_scanner.filter_output(config.LLM_FILE_NAME)
@@ -39,4 +43,4 @@ def main():
     ui.print_completion(f"Scan complete. Final results can be found in {config.CLEAN_UP_FILE_NAME}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
