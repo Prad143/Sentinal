@@ -63,3 +63,6 @@ def print_progress(message):
 
 def print_completion(message):
     print(f"\n{message}")
+
+def print_error(message):
+    print(f"\n\033[91mError: {message}\033[0m")
