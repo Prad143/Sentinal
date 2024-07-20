@@ -3,10 +3,19 @@ from utils import ui, file_operations
 from scanners import url_finder, javascript_scanner, vulnerability_scanner, search_scraper
 from api import llm
 import config
+from tasks import (
+    find_urls_task,
+    search_urls_task,
+    scan_javascript_task,
+    analyze_javascript_task,
+    filter_output_task,
+    interpret_results_task
+)
 
 async def scan_url(url, max_recursion_level):
     ui.print_progress("Crawling website for URLs...")
-    urls = await url_finder.find_urls(url, max_recursion_level)
+    task = find_urls_task.delay(url, max_recursion_level)
+    urls = task.get()
     file_operations.write_urls_to_file(urls, config.FILE_NAME)
     ui.print_completion(f"Found {len(urls)} unique URLs. Results written to {config.FILE_NAME}")
     return urls
@@ -22,16 +31,19 @@ async def main():
     else:
         query, engine, num_results = ui.get_search_input()
         ui.print_progress(f"Searching {engine} for '{query}'...")
-        urls = await search_scraper.search_urls(query, engine, num_results)
+        task = search_urls_task.delay(query, engine, num_results)
+        urls = task.get()
         file_operations.write_urls_to_file(urls, config.FILE_NAME)
         ui.print_completion(f"Found {len(urls)} URLs from {engine} search. Results written to {config.FILE_NAME}")
     
     ui.print_progress("Scanning JavaScript files...")
-    await javascript_scanner.scan_javascript(config.FILE_NAME, config.JS_SCANNER_FILE_NAME)
+    task = scan_javascript_task.delay(config.FILE_NAME, config.JS_SCANNER_FILE_NAME)
+    task.get()
     ui.print_completion("JavaScript scanning complete.")
     
     ui.print_progress("Analyzing JavaScript with LLM...")
-    analysis_file = await llm.analyze_javascript(config.JS_UNIQUE_FILE_NAME)
+    task = analyze_javascript_task.delay(config.JS_UNIQUE_FILE_NAME)
+    analysis_file = task.get()
     if analysis_file:
         ui.print_completion(f"LLM analysis complete. Results written to {analysis_file}")
     else:
@@ -39,15 +51,17 @@ async def main():
         return
     
     ui.print_progress("Filtering LLM output...")
-    vulnerability_scanner.filter_output(config.LLM_FILE_NAME)
+    task = filter_output_task.delay(config.LLM_FILE_NAME)
+    task.get()
     ui.print_completion("Filtering complete.")
     
     ui.print_progress("Interpreting results...")
-    vulnerability_scanner.interpret_results(
+    task = interpret_results_task.delay(
         config.JS_UNIQUE_FILE_NAME,
         config.JS_URL_FILE_NAME,
         config.CLEAN_UP_FILE_NAME
     )
+    task.get()
     ui.print_completion("Results interpretation complete.")
     
     file_operations.clean_up_files(config.CLEAN_UP_FILE_NAME)
