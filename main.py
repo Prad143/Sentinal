@@ -1,10 +1,9 @@
 import asyncio
+from celery.result import AsyncResult
 from utils import ui, file_operations
-from scanners import url_finder, javascript_scanner, vulnerability_scanner, search_scraper
-from api import llm
 import config
+from scanners.url_finder import find_urls_task
 from tasks import (
-    find_urls_task,
     search_urls_task,
     scan_javascript_task,
     analyze_javascript_task,
@@ -15,10 +14,13 @@ from tasks import (
 async def scan_url(url, max_recursion_level):
     ui.print_progress("Crawling website for URLs...")
     task = find_urls_task.delay(url, max_recursion_level)
-    urls = task.get()
+    urls = await wait_for_task(task)
     file_operations.write_urls_to_file(urls, config.FILE_NAME)
     ui.print_completion(f"Found {len(urls)} unique URLs. Results written to {config.FILE_NAME}")
     return urls
+
+async def wait_for_task(task):
+    return await asyncio.to_thread(task.get, timeout=None)
 
 async def main():
     ui.print_banner()
@@ -32,18 +34,18 @@ async def main():
         query, engine, num_results = ui.get_search_input()
         ui.print_progress(f"Searching {engine} for '{query}'...")
         task = search_urls_task.delay(query, engine, num_results)
-        urls = task.get()
+        urls = await wait_for_task(task)
         file_operations.write_urls_to_file(urls, config.FILE_NAME)
         ui.print_completion(f"Found {len(urls)} URLs from {engine} search. Results written to {config.FILE_NAME}")
     
     ui.print_progress("Scanning JavaScript files...")
     task = scan_javascript_task.delay(config.FILE_NAME, config.JS_SCANNER_FILE_NAME)
-    task.get()
+    await wait_for_task(task)
     ui.print_completion("JavaScript scanning complete.")
     
     ui.print_progress("Analyzing JavaScript with LLM...")
     task = analyze_javascript_task.delay(config.JS_UNIQUE_FILE_NAME)
-    analysis_file = task.get()
+    analysis_file = await wait_for_task(task)
     if analysis_file:
         ui.print_completion(f"LLM analysis complete. Results written to {analysis_file}")
     else:
@@ -52,7 +54,7 @@ async def main():
     
     ui.print_progress("Filtering LLM output...")
     task = filter_output_task.delay(config.LLM_FILE_NAME)
-    task.get()
+    await wait_for_task(task)
     ui.print_completion("Filtering complete.")
     
     ui.print_progress("Interpreting results...")
@@ -61,7 +63,7 @@ async def main():
         config.JS_URL_FILE_NAME,
         config.CLEAN_UP_FILE_NAME
     )
-    task.get()
+    await wait_for_task(task)
     ui.print_completion("Results interpretation complete.")
     
     file_operations.clean_up_files(config.CLEAN_UP_FILE_NAME)

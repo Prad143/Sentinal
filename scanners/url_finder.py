@@ -5,6 +5,11 @@ from urllib.parse import urlparse, urljoin
 from utils.ui import print_progress
 from utils.vpn_manager import VPNManager
 import config
+from celery_app import app
+
+@app.task
+def find_urls_task(start_url, max_recursion_level):
+    return asyncio.run(find_urls(start_url, max_recursion_level))
 
 async def find_urls(start_url, max_recursion_level):
     visited_urls = set()
@@ -48,3 +53,21 @@ async def find_urls(start_url, max_recursion_level):
                 print(f"Unexpected error crawling {url}: {str(e)}")
     
     return sorted(all_urls)
+
+# This function can be used for testing the module independently
+async def main_test(url, max_recursion_level):
+    urls = await find_urls(url, max_recursion_level)
+    print(f"Found {len(urls)} unique URLs:")
+    for url in urls:
+        print(url)
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 3:
+        print("Usage: python url_finder.py <start_url> <max_recursion_level>")
+        sys.exit(1)
+    
+    start_url = sys.argv[1]
+    max_recursion_level = int(sys.argv[2])
+    
+    asyncio.run(main_test(start_url, max_recursion_level))

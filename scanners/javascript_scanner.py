@@ -1,75 +1,77 @@
 import asyncio
-import pyppeteer
-import re
-from urllib.parse import urljoin
-from utils.file_operations import read_urls_from_file, write_to_file
 import aiohttp
+from bs4 import BeautifulSoup
+from utils.file_operations import read_urls_from_file, write_to_file
+from utils.vpn_manager import VPNManager
+import config
+from celery_app import app
 
-async def extract_js_content(page, url):
-    # Extract external JavaScript
-    script_tags = await page.evaluate('''() => {
-        return Array.from(document.getElementsByTagName('script'))
-            .filter(script => script.src)
-            .map(script => script.src);
-    }''')
-    
+async def extract_js_content(html, url):
+    soup = BeautifulSoup(html, 'html.parser')
     external_js = []
-    for src in script_tags:
-        full_url = urljoin(url, src)
-        js_content = await fetch_js_content(full_url)
-        if js_content:
-            external_js.append((full_url, js_content))
-    
-    # Extract inline JavaScript
-    inline_js = await page.evaluate('''() => {
-        return Array.from(document.getElementsByTagName('script'))
-            .filter(script => !script.src)
-            .map(script => script.innerHTML);
-    }''')
-    
+    inline_js = []
+
+    for script in soup.find_all('script'):
+        if script.get('src'):
+            js_url = script['src']
+            if not js_url.startswith(('http://', 'https://')):
+                js_url = f"{url.rstrip('/')}/{js_url.lstrip('/')}"
+            external_js.append(js_url)
+        elif script.string:
+            inline_js.append(script.string)
+
     return external_js, inline_js
 
-async def fetch_js_content(url):
+async def fetch_js_content(session, url):
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    return await response.text()
+        async with session.get(url, timeout=10) as response:
+            if response.status == 200:
+                return await response.text()
     except Exception as e:
         print(f"Error fetching JavaScript from {url}: {str(e)}")
     return None
 
-async def scan_single_url(url, all_js_content, js_url_mapping):
+async def scan_single_url(url, all_js_content, js_url_mapping, session):
     try:
-        browser = await pyppeteer.launch()
-        page = await browser.newPage()
-        await page.goto(url)
-        
-        external_js, inline_js = await extract_js_content(page, url)
-        
-        for js_url, js_content in external_js:
-            all_js_content.add(js_content)
-            if js_content not in js_url_mapping:
-                js_url_mapping[js_content] = []
-            js_url_mapping[js_content].append(js_url)
-        
-        for js in inline_js:
-            all_js_content.add(js)
-            if js not in js_url_mapping:
-                js_url_mapping[js] = []
-            js_url_mapping[js].append(f"{url} (inline)")
-        
-        await browser.close()
+        async with session.get(url, timeout=10) as response:
+            if response.status == 200:
+                html = await response.text()
+                external_js, inline_js = await extract_js_content(html, url)
+                
+                for js_url in external_js:
+                    js_content = await fetch_js_content(session, js_url)
+                    if js_content:
+                        all_js_content.add(js_content)
+                        if js_content not in js_url_mapping:
+                            js_url_mapping[js_content] = []
+                        js_url_mapping[js_content].append(js_url)
+                
+                for js in inline_js:
+                    all_js_content.add(js)
+                    if js not in js_url_mapping:
+                        js_url_mapping[js] = []
+                    js_url_mapping[js].append(f"{url} (inline)")
     except Exception as e:
         print(f"Error scanning {url}: {str(e)}")
 
+@app.task
 async def scan_javascript(input_file, output_file):
     urls = read_urls_from_file(input_file)
     all_js_content = set()
     js_url_mapping = {}
 
-    tasks = [scan_single_url(url, all_js_content, js_url_mapping) for url in urls]
-    await asyncio.gather(*tasks)
+    async with VPNManager(config.VPN_CONFIG_FILES) as vpn_manager:
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for url in urls:
+                tasks.append(scan_single_url(url, all_js_content, js_url_mapping, session))
+                if len(tasks) >= config.VPN_ROTATION_INTERVAL:
+                    await asyncio.gather(*tasks)
+                    tasks = []
+                    await vpn_manager.rotate()
+            
+            if tasks:
+                await asyncio.gather(*tasks)
 
     # Write unique JavaScript content to file
     write_to_file(output_file, "\n".join(all_js_content))
@@ -85,6 +87,7 @@ async def scan_javascript(input_file, output_file):
             f.write("\n")
 
     print(f"JavaScript scanning complete. Results written to {output_file} and {url_mapping_file}")
+    return output_file, url_mapping_file
 
 if __name__ == "__main__":
     # This allows the script to be run standalone for testing

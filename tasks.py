@@ -1,10 +1,7 @@
 from celery_app import app
-from scanners import url_finder, javascript_scanner, vulnerability_scanner, search_scraper
+from scanners.url_finder import find_urls_task
+from scanners import javascript_scanner, vulnerability_scanner, search_scraper
 from api import llm
-
-@app.task
-def find_urls_task(url, max_recursion_level):
-    return url_finder.find_urls(url, max_recursion_level)
 
 @app.task
 def search_urls_task(query, engine, num_results):
